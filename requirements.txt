@@ -1,0 +1,12 @@
+streamlit
+langchain
+langchain-community
+langchain-openai
+langchain-text-splitters
+chromadb
+openai
+tiktoken
+pandas
+pdfplumber
+scikit-learn
+plotly
