@@ -289,22 +289,9 @@ python test_prompt_manager.py
 python test_result_exporter.py
 ```
 
-## 已实现的关键改造
-
-相较于传统“RAG 回答后再做泛化打分”的方式，本项目当前版本已经完成以下改造：
-
-- 使用结构化评测集直接评估 `candidate_answer`
-- 支持整体判定与 claim 级判定
-- 支持 Prompt 模板管理
-- 支持评测结果导出
-- 支持错误分析视图
-- 支持配置文件驱动运行
-- 支持 `PDF/TXT/DOC/DOCX` 知识库导入
 
 ## 注意事项
 
-- `config/app_config.json` 中不要保留真实 API Key 后再提交到 GitHub
-- `data/chroma_db/` 为本地向量库目录，不建议纳入版本控制
 - `doc` 文件解析依赖本地 Word 环境
 - 当前项目更适合轻量演示型知识库，不建议直接将大量长文档混入同一个演示库
 

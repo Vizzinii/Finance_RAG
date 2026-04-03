@@ -21,7 +21,44 @@ from knowledge_base.vector_store_manager import VectorStoreManager
 from rag_engine.financial_rag import FinancialRAG
 
 
-st.set_page_config(page_title="Financial Hallucination Evaluation", layout="wide")
+st.set_page_config(page_title="金融幻觉评测系统", layout="wide")
+
+PROVIDER_LABELS = {
+    "OpenAI": "OpenAI",
+    "Aliyun DashScope (Qwen)": "阿里云 DashScope (Qwen)",
+    "Other": "其他"
+}
+
+RESULT_COLUMN_LABELS = {
+    "id": "编号",
+    "question": "问题",
+    "candidate_answer": "候选回答",
+    "expected_label": "真实标签",
+    "predicted_label": "预测标签",
+    "verdict": "判定结果",
+    "reason": "判定原因",
+    "source_model": "来源模型",
+    "is_correct": "是否判对"
+}
+
+LABEL_DISPLAY_MAP = {
+    "positive": "阳性（有幻觉）",
+    "negative": "阴性（无幻觉）"
+}
+
+VERDICT_DISPLAY_MAP = {
+    "supported": "证据支持",
+    "hallucinated": "存在幻觉",
+    "uncertain": "证据不足",
+    "contradicted": "与证据矛盾",
+    "insufficient_evidence": "证据不足"
+}
+
+BOOL_DISPLAY_MAP = {
+    True: "是",
+    False: "否"
+}
+
 SAMPLE_DATASET_PATH = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "data", "sample_eval_dataset.json")
 )
@@ -125,7 +162,36 @@ def apply_provider_preset():
     st.session_state["base_url"] = preset["base_url"]
     st.session_state["chat_model_name"] = preset["chat_model_name"]
     st.session_state["embedding_model_name"] = preset["embedding_model_name"]
-    
+
+
+def format_label(label):
+    return LABEL_DISPLAY_MAP.get(label, label)
+
+
+def format_verdict(verdict):
+    return VERDICT_DISPLAY_MAP.get(verdict, verdict)
+
+
+def format_provider(provider):
+    return PROVIDER_LABELS.get(provider, provider)
+
+
+def localize_results_dataframe(df_results):
+    localized = df_results.copy()
+    for column in ["expected_label", "predicted_label"]:
+        if column in localized.columns:
+            localized[column] = localized[column].map(
+                lambda value: format_label(value) if pd.notna(value) else value
+            )
+    if "verdict" in localized.columns:
+        localized["verdict"] = localized["verdict"].map(
+            lambda value: format_verdict(value) if pd.notna(value) else value
+        )
+    if "is_correct" in localized.columns:
+        localized["is_correct"] = localized["is_correct"].map(
+            lambda value: BOOL_DISPLAY_MAP.get(value, value) if pd.notna(value) else value
+        )
+    return localized.rename(columns=RESULT_COLUMN_LABELS)
 
 
 def export_results_as_json(results, metrics, mode: str, dataset_name: str, runtime_config):
@@ -186,18 +252,18 @@ def render_eval_metrics(metrics):
         return
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Accuracy", f"{metrics['accuracy']:.2f}")
-    col2.metric("Precision", f"{metrics['precision']:.2f}")
-    col3.metric("Recall", f"{metrics['recall']:.2f}")
+    col1.metric("准确率", f"{metrics['accuracy']:.2f}")
+    col2.metric("精确率", f"{metrics['precision']:.2f}")
+    col3.metric("召回率", f"{metrics['recall']:.2f}")
     col4.metric("F1", f"{metrics['f1']:.2f}")
-    col5.metric("Uncertain Rate", f"{metrics['uncertain_rate']:.2f}")
+    col5.metric("不确定占比", f"{metrics['uncertain_rate']:.2f}")
 
 
 def render_eval_results(results, mode: str):
     if not results:
         return
 
-    st.subheader("Sample Results")
+    st.subheader("样本结果")
     df_results = pd.DataFrame(results)
     visible_columns = [
         "id",
@@ -211,35 +277,36 @@ def render_eval_results(results, mode: str):
         "is_correct"
     ]
     visible_columns = [column for column in visible_columns if column in df_results.columns]
-    st.dataframe(df_results[visible_columns], use_container_width=True)
+    localized_results = localize_results_dataframe(df_results[visible_columns])
+    st.dataframe(localized_results, use_container_width=True)
 
     if mode == "claim":
-        st.subheader("Claim-Level Details")
+        st.subheader("Claim 级明细")
         for result in results:
-            with st.expander(f"Sample {result['id']} - {result['verdict']}"):
-                st.write("Question:", result["question"])
-                st.write("Candidate answer:", result["candidate_answer"])
-                st.write("Reason:", result["reason"])
-                st.write("Claim counts:")
+            with st.expander(f"样本 {result['id']} - {format_verdict(result['verdict'])}"):
+                st.write("问题：", result["question"])
+                st.write("候选回答：", result["candidate_answer"])
+                st.write("判定原因：", result["reason"])
+                st.write("Claim 统计：")
                 st.json(result.get("claim_counts", {}))
                 for claim_result in result.get("claim_results", []):
                     st.text(
-                        f"{claim_result['verdict']} | {claim_result['claim']} | "
-                        f"confidence: {claim_result['confidence']:.2f}"
+                        f"{format_verdict(claim_result['verdict'])} | {claim_result['claim']} | "
+                        f"置信度: {claim_result['confidence']:.2f}"
                     )
                     if claim_result.get("evidence"):
-                        st.text("Evidence: " + " | ".join(claim_result["evidence"]))
+                        st.text("证据： " + " | ".join(claim_result["evidence"]))
     else:
-        st.subheader("Evidence Highlights")
+        st.subheader("证据摘要")
         for result in results:
-            with st.expander(f"Sample {result['id']} - {result['verdict']}"):
-                st.write("Question:", result["question"])
-                st.write("Candidate answer:", result["candidate_answer"])
-                st.write("Reason:", result["reason"])
+            with st.expander(f"样本 {result['id']} - {format_verdict(result['verdict'])}"):
+                st.write("问题：", result["question"])
+                st.write("候选回答：", result["candidate_answer"])
+                st.write("判定原因：", result["reason"])
                 if result.get("evidence"):
-                    st.text("Evidence: " + " | ".join(result["evidence"]))
+                    st.text("证据： " + " | ".join(result["evidence"]))
                 if result.get("unsupported_parts"):
-                    st.text("Unsupported parts: " + " | ".join(result["unsupported_parts"]))
+                    st.text("缺乏支持的部分： " + " | ".join(result["unsupported_parts"]))
 
 
 def render_error_analysis(results, mode: str):
@@ -247,63 +314,66 @@ def render_error_analysis(results, mode: str):
         return
 
     buckets = summarize_error_buckets(results)
-    st.subheader("Error Analysis")
+    st.subheader("错误分析")
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Incorrect Cases", len(buckets["incorrect"]))
-    col2.metric("Uncertain Cases", len(buckets["uncertain"]))
-    col3.metric("False Positives", len(buckets["false_positive"]))
-    col4.metric("False Negatives", len(buckets["false_negative"]))
+    col1.metric("错误样本数", len(buckets["incorrect"]))
+    col2.metric("不确定样本数", len(buckets["uncertain"]))
+    col3.metric("假阳性", len(buckets["false_positive"]))
+    col4.metric("假阴性", len(buckets["false_negative"]))
 
     analysis_tab1, analysis_tab2, analysis_tab3 = st.tabs(
-        ["Incorrect", "Uncertain", "Misclassified Labels"]
+        ["错误样本", "不确定样本", "误分类样本"]
     )
 
     with analysis_tab1:
         if not buckets["incorrect"]:
-            st.info("No incorrect cases found in the current run.")
+            st.info("当前评测中没有错误样本。")
         else:
             for result in buckets["incorrect"]:
-                with st.expander(f"Case {result['id']} | expected {result['expected_label']} | predicted {result['predicted_label']}"):
-                    st.write("Question:", result["question"])
-                    st.write("Candidate answer:", result["candidate_answer"])
-                    st.write("Reason:", result["reason"])
+                with st.expander(
+                    f"样本 {result['id']} | 真实标签 {format_label(result['expected_label'])} | "
+                    f"预测标签 {format_label(result['predicted_label'])}"
+                ):
+                    st.write("问题：", result["question"])
+                    st.write("候选回答：", result["candidate_answer"])
+                    st.write("判定原因：", result["reason"])
                     if mode == "claim":
                         for claim_result in result.get("claim_results", []):
                             st.text(
-                                f"{claim_result['verdict']} | {claim_result['claim']} | "
-                                f"confidence: {claim_result['confidence']:.2f}"
+                                f"{format_verdict(claim_result['verdict'])} | {claim_result['claim']} | "
+                                f"置信度: {claim_result['confidence']:.2f}"
                             )
                     else:
                         if result.get("unsupported_parts"):
-                            st.text("Unsupported parts: " + " | ".join(result["unsupported_parts"]))
+                            st.text("缺乏支持的部分： " + " | ".join(result["unsupported_parts"]))
                         if result.get("evidence"):
-                            st.text("Evidence: " + " | ".join(result["evidence"]))
+                            st.text("证据： " + " | ".join(result["evidence"]))
 
     with analysis_tab2:
         if not buckets["uncertain"]:
-            st.info("No uncertain cases found in the current run.")
+            st.info("当前评测中没有不确定样本。")
         else:
             for result in buckets["uncertain"]:
-                with st.expander(f"Case {result['id']} | uncertain"):
-                    st.write("Question:", result["question"])
-                    st.write("Candidate answer:", result["candidate_answer"])
-                    st.write("Reason:", result["reason"])
+                with st.expander(f"样本 {result['id']} | 证据不足"):
+                    st.write("问题：", result["question"])
+                    st.write("候选回答：", result["candidate_answer"])
+                    st.write("判定原因：", result["reason"])
                     if mode == "claim":
                         st.json(result.get("claim_counts", {}))
                         for claim_result in result.get("claim_results", []):
                             st.text(
-                                f"{claim_result['verdict']} | {claim_result['claim']} | "
-                                f"confidence: {claim_result['confidence']:.2f}"
+                                f"{format_verdict(claim_result['verdict'])} | {claim_result['claim']} | "
+                                f"置信度: {claim_result['confidence']:.2f}"
                             )
                     else:
                         if result.get("evidence"):
-                            st.text("Evidence: " + " | ".join(result["evidence"]))
+                            st.text("证据： " + " | ".join(result["evidence"]))
 
     with analysis_tab3:
         misclassified = buckets["false_positive"] + buckets["false_negative"]
         if not misclassified:
-            st.info("No false positives or false negatives found in the current run.")
+            st.info("当前评测中没有假阳性或假阴性样本。")
         else:
             rows = [
                 {
@@ -315,18 +385,19 @@ def render_error_analysis(results, mode: str):
                 }
                 for result in misclassified
             ]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            localized_misclassified = localize_results_dataframe(pd.DataFrame(rows))
+            st.dataframe(localized_misclassified, use_container_width=True)
 
 
 def main():
-    st.title("Financial Hallucination Evaluation System")
+    st.title("金融场景 RAG 幻觉评测系统")
     prompt_manager = PromptTemplateManager()
     test_set_manager = TestSetManager()
     app_config = APP_CONFIG_MANAGER.load_config()
     provider_presets = APP_CONFIG_MANAGER.get_provider_presets(app_config)
 
     if not provider_presets:
-        st.error("No provider presets were found in the config file.")
+        st.error("配置文件中未找到可用的模型服务商预设。")
         st.stop()
 
     if st.session_state["provider"] not in provider_presets:
@@ -334,41 +405,42 @@ def main():
         apply_provider_preset()
 
     with st.sidebar:
-        st.header("Configuration")
+        st.header("系统配置")
 
-        st.caption(f"Config file: {CONFIG_FILE_PATH}")
+        st.caption(f"配置文件：{CONFIG_FILE_PATH}")
 
         st.selectbox(
-            "Provider",
+            "模型服务商",
             list(provider_presets.keys()),
             key="provider",
-            on_change=apply_provider_preset
+            on_change=apply_provider_preset,
+            format_func=format_provider
         )
-        st.text_input("Base URL", key="base_url")
-        st.text_input("Chat Model Name", key="chat_model_name")
-        st.text_input("Embedding Model Name", key="embedding_model_name")
+        st.text_input("接口地址", key="base_url")
+        st.text_input("对话模型名称", key="chat_model_name")
+        st.text_input("向量模型名称", key="embedding_model_name")
         st.text_input(
             "API Key",
             key="api_key",
             type="password",
-            help="Stored directly in the config file when you click Save Config."
+            help="点击“保存配置”后会直接写入配置文件，仅建议在本地演示环境使用。"
         )
-        st.text_input("Vector Store Directory", key="vector_store_directory")
-        st.number_input("Retrieval Top K", min_value=1, max_value=20, step=1, key="retrieval_top_k")
+        st.text_input("向量库目录", key="vector_store_directory")
+        st.number_input("检索 Top K", min_value=1, max_value=20, step=1, key="retrieval_top_k")
 
         config_col1, config_col2 = st.columns(2)
-        if config_col1.button("Save Config", use_container_width=True):
+        if config_col1.button("保存配置", use_container_width=True):
             saved_config = APP_CONFIG_MANAGER.save_runtime_config(get_runtime_config())
             st.session_state["vector_store"] = None
             st.session_state["rag_engine"] = None
-            st.session_state["config_status_message"] = "Saved runtime config."
+            st.session_state["config_status_message"] = "运行配置已保存。"
             st.session_state["_pending_runtime_config"] = APP_CONFIG_MANAGER.get_runtime_config(saved_config)
             st.rerun()
-        if config_col2.button("Reload Config", use_container_width=True):
+        if config_col2.button("重新加载", use_container_width=True):
             reloaded_config = APP_CONFIG_MANAGER.load_config()
             st.session_state["vector_store"] = None
             st.session_state["rag_engine"] = None
-            st.session_state["config_status_message"] = "Reloaded runtime config from file."
+            st.session_state["config_status_message"] = "已从配置文件重新加载运行配置。"
             st.session_state["_pending_runtime_config"] = APP_CONFIG_MANAGER.get_runtime_config(reloaded_config)
             st.rerun()
 
@@ -376,10 +448,10 @@ def main():
             st.success(st.session_state["config_status_message"])
             st.session_state["config_status_message"] = ""
 
-        with st.expander("Evaluation Prompts", expanded=False):
+        with st.expander("评测 Prompt 配置", expanded=False):
             template_names = prompt_manager.list_templates()
             selected_template = st.selectbox(
-                "Prompt Template",
+                "Prompt 模板",
                 options=template_names,
                 index=template_names.index(st.session_state["active_prompt_template"])
                 if st.session_state["active_prompt_template"] in template_names
@@ -387,38 +459,38 @@ def main():
             )
 
             col1, col2 = st.columns(2)
-            if col1.button("Load Template", use_container_width=True):
+            if col1.button("加载模板", use_container_width=True):
                 prompts = prompt_manager.load_template(selected_template)
                 apply_prompt_template(prompts)
                 st.session_state["active_prompt_template"] = selected_template
                 st.rerun()
-            if col2.button("Restore Default", use_container_width=True):
+            if col2.button("恢复默认", use_container_width=True):
                 apply_prompt_template(prompt_manager.get_default_prompts())
                 st.session_state["active_prompt_template"] = PromptTemplateManager.DEFAULT_TEMPLATE_NAME
                 st.rerun()
 
             save_template_name = st.text_input(
-                "Save Current Prompts As",
+                "将当前 Prompt 另存为",
                 value=st.session_state["active_prompt_template"]
             )
 
             st.session_state["overall_prompt"] = st.text_area(
-                "Overall Prompt",
+                "整体判定 Prompt",
                 value=st.session_state["overall_prompt"],
                 height=260
             )
             st.session_state["claim_extraction_prompt"] = st.text_area(
-                "Claim Extraction Prompt",
+                "Claim 拆解 Prompt",
                 value=st.session_state["claim_extraction_prompt"],
                 height=220
             )
             st.session_state["claim_verification_prompt"] = st.text_area(
-                "Claim Verification Prompt",
+                "Claim 核验 Prompt",
                 value=st.session_state["claim_verification_prompt"],
                 height=260
             )
 
-            if st.button("Save Prompt Template", use_container_width=True):
+            if st.button("保存 Prompt 模板", use_container_width=True):
                 saved_name = prompt_manager.save_template(
                     save_template_name,
                     {
@@ -428,9 +500,9 @@ def main():
                     }
                 )
                 st.session_state["active_prompt_template"] = saved_name
-                st.success(f"Saved prompt template: {saved_name}")
+                st.success(f"已保存 Prompt 模板：{saved_name}")
 
-        if st.button("Reset Runtime"):
+        if st.button("重置运行状态"):
             st.session_state["vector_store"] = None
             st.session_state["rag_engine"] = None
             st.session_state["messages"] = []
@@ -443,11 +515,11 @@ def main():
             st.rerun()
 
         st.divider()
-        st.write("System Status")
+        st.write("系统状态")
         if st.session_state["vector_store"]:
-            st.success("Vector store ready")
+            st.success("向量库已就绪")
         else:
-            st.warning("Vector store not initialized")
+            st.warning("向量库尚未初始化")
 
     runtime_config = get_runtime_config()
     base_url = runtime_config["base_url"]
@@ -457,12 +529,12 @@ def main():
     retrieval_top_k = int(runtime_config["retrieval_top_k"])
     api_key = runtime_config["api_key"].strip()
 
-    tab1, tab2, tab3 = st.tabs(["Chat", "Data", "Eval"])
+    tab1, tab2, tab3 = st.tabs(["问答", "数据", "评测"])
 
     with tab1:
-        st.header("RAG Chat")
+        st.header("RAG 问答")
         if not api_key:
-            st.error("Please provide an API key in the sidebar.")
+            st.error("请先在左侧边栏填写 API Key。")
         else:
             rag_engine = ensure_rag_engine(
                 base_url,
@@ -477,45 +549,45 @@ def main():
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
 
-            if prompt := st.chat_input("Ask a finance question..."):
+            if prompt := st.chat_input("请输入金融问题..."):
                 st.chat_message("user").markdown(prompt)
                 st.session_state["messages"].append({"role": "user", "content": prompt})
 
                 with st.chat_message("assistant"):
-                    with st.spinner("Generating answer..."):
+                    with st.spinner("正在生成回答..."):
                         try:
                             response = rag_engine.generate_answer(prompt)
                             answer = response["answer"]
                             sources = response["source_documents"]
 
                             st.markdown(answer)
-                            with st.expander("Sources"):
+                            with st.expander("参考证据"):
                                 for index, doc in enumerate(sources, start=1):
-                                    st.write(f"Source {index}: {doc[:300]}...")
+                                    st.write(f"证据 {index}：{doc[:300]}...")
 
                             st.session_state["messages"].append(
                                 {"role": "assistant", "content": answer}
                             )
                         except Exception as exc:
-                            st.error(f"Error: {exc}")
+                            st.error(f"运行出错：{exc}")
 
     with tab2:
-        st.header("Data Management")
+        st.header("数据管理")
         col1, col2 = st.columns(2)
         manager = test_set_manager
 
         with col1:
-            st.subheader("Knowledge Base Upload")
+            st.subheader("知识库上传")
             kb_file = st.file_uploader(
-                "Upload PDF, TXT, DOC, or DOCX",
+                "上传 PDF、TXT、DOC 或 DOCX 文件",
                 type=["pdf", "txt", "doc", "docx"],
                 key="kb_file"
             )
-            if kb_file and st.button("Process and Add to KB"):
+            if kb_file and st.button("处理并加入知识库"):
                 if not api_key:
-                    st.error("Embedding requires an API key.")
+                    st.error("向量化需要先提供 API Key。")
                 else:
-                    with st.spinner("Processing document..."):
+                    with st.spinner("正在处理文档..."):
                         temp_path = os.path.join("data", kb_file.name)
                         try:
                             with open(temp_path, "wb") as file:
@@ -530,37 +602,37 @@ def main():
                             )
                             chunks = vector_store.text_splitter(content)
                             vector_store.add_documents(chunks)
-                            st.success(f"Added {len(chunks)} chunks to the knowledge base.")
+                            st.success(f"已向知识库添加 {len(chunks)} 个文本切片。")
                         except Exception as exc:
-                            st.error(f"Failed to process file: {exc}")
+                            st.error(f"文档处理失败：{exc}")
                         finally:
                             if os.path.exists(temp_path):
                                 os.remove(temp_path)
 
-            st.subheader("Import Evaluation Dataset")
+            st.subheader("导入评测数据集")
             dataset_file = st.file_uploader(
-                "Upload dataset JSON",
+                "上传评测数据集 JSON",
                 type=["json"],
                 key="dataset_file"
             )
-            if dataset_file and st.button("Import Dataset JSON"):
+            if dataset_file and st.button("导入数据集 JSON"):
                 try:
                     manager.import_json_text(dataset_file.getvalue().decode("utf-8"))
-                    st.success("Dataset imported successfully.")
+                    st.success("评测数据集导入成功。")
                 except Exception as exc:
-                    st.error(f"Failed to import dataset: {exc}")
+                    st.error(f"评测数据集导入失败：{exc}")
 
             sample_col1, sample_col2 = st.columns(2)
-            if sample_col1.button("Load Sample Dataset", use_container_width=True):
+            if sample_col1.button("加载示例数据集", use_container_width=True):
                 try:
                     manager.import_json_file(SAMPLE_DATASET_PATH)
-                    st.success("Sample dataset loaded into the workspace.")
+                    st.success("示例数据集已加载到当前工作区。")
                 except Exception as exc:
-                    st.error(f"Failed to load sample dataset: {exc}")
+                    st.error(f"示例数据集加载失败：{exc}")
             if os.path.exists(SAMPLE_DATASET_PATH):
                 with open(SAMPLE_DATASET_PATH, "rb") as sample_file:
                     sample_col2.download_button(
-                        "Download Sample JSON",
+                        "下载示例 JSON",
                         data=sample_file.read(),
                         file_name="sample_eval_dataset.json",
                         mime="application/json",
@@ -569,25 +641,29 @@ def main():
 
             dataset = manager.get_dataset()
             st.caption(
-                f"Dataset: {dataset.get('dataset_name', '')} | "
-                f"KB Version: {dataset.get('kb_version', '') or 'N/A'} | "
-                f"Samples: {len(dataset.get('samples', []))}"
+                f"数据集：{dataset.get('dataset_name', '')} | "
+                f"知识库版本：{dataset.get('kb_version', '') or '未填写'} | "
+                f"样本数：{len(dataset.get('samples', []))}"
             )
 
         with col2:
-            st.subheader("Add Evaluation Sample")
+            st.subheader("新增评测样本")
             with st.form("add_case_form"):
-                question = st.text_input("Question")
-                candidate_answer = st.text_area("Candidate Answer")
-                label = st.selectbox("Label", ["negative", "positive"])
-                source_model = st.text_input("Source Model", value="manual")
-                source_type = st.text_input("Source Type", value="manual")
-                ground_truth = st.text_area("Ground Truth (Optional)")
-                reference_docs = st.text_area(
-                    "Reference Docs (one per line, optional)"
+                question = st.text_input("问题")
+                candidate_answer = st.text_area("候选回答")
+                label = st.selectbox(
+                    "标签",
+                    ["negative", "positive"],
+                    format_func=format_label
                 )
-                notes = st.text_area("Notes (Optional)")
-                submitted = st.form_submit_button("Add Sample")
+                source_model = st.text_input("来源模型", value="manual")
+                source_type = st.text_input("来源类型", value="manual")
+                ground_truth = st.text_area("标准答案（可选）")
+                reference_docs = st.text_area(
+                    "参考证据（每行一条，可选）"
+                )
+                notes = st.text_area("备注（可选）")
+                submitted = st.form_submit_button("添加样本")
                 if submitted:
                     try:
                         manager.add_case(
@@ -604,35 +680,51 @@ def main():
                             ],
                             notes=notes
                         )
-                        st.success("Sample added.")
+                        st.success("样本已添加。")
                     except Exception as exc:
-                        st.error(f"Failed to add sample: {exc}")
+                        st.error(f"添加样本失败：{exc}")
 
         samples = manager.get_all_cases()
-        st.subheader("Current Evaluation Samples")
+        st.subheader("当前评测样本")
         if samples:
             df_cases = pd.DataFrame(samples)
-            st.dataframe(df_cases, use_container_width=True)
+            localized_cases = df_cases.copy()
+            if "label" in localized_cases.columns:
+                localized_cases["label"] = localized_cases["label"].map(format_label)
+            localized_cases = localized_cases.rename(
+                columns={
+                    "id": "编号",
+                    "question": "问题",
+                    "candidate_answer": "候选回答",
+                    "label": "标签",
+                    "source_model": "来源模型",
+                    "source_type": "来源类型",
+                    "reference_docs": "参考证据",
+                    "ground_truth": "标准答案",
+                    "notes": "备注"
+                }
+            )
+            st.dataframe(localized_cases, use_container_width=True)
         else:
-            st.info("No evaluation samples found.")
+            st.info("当前还没有评测样本。")
 
     with tab3:
-        st.header("Evaluation Dashboard")
+        st.header("评测面板")
         eval_mode = st.radio(
-            "Evaluation Mode",
+            "评测模式",
             options=["overall", "claim"],
-            format_func=lambda value: "Overall Verdict" if value == "overall" else "Claim-Level Verification",
+            format_func=lambda value: "整体判定" if value == "overall" else "Claim 级核验",
             horizontal=True
         )
 
-        if st.button("Run Evaluation"):
+        if st.button("运行评测"):
             dataset = TestSetManager().get_dataset()
             samples = dataset.get("samples", [])
 
             if not api_key:
-                st.error("Please provide an API key in the sidebar.")
+                st.error("请先在左侧边栏填写 API Key。")
             elif not samples:
-                st.warning("No evaluation samples found.")
+                st.warning("当前没有可评测的样本。")
             else:
                 try:
                     rag_engine = ensure_rag_engine(
@@ -654,7 +746,7 @@ def main():
                         claim_verification_prompt=st.session_state["claim_verification_prompt"]
                     )
 
-                    with st.spinner(f"Evaluating {len(samples)} samples..."):
+                    with st.spinner(f"正在评测 {len(samples)} 条样本..."):
                         results = evaluator.run_batch_eval(dataset, rag_engine, mode=eval_mode)
                         metrics = evaluator.calculate_classification_metrics(results)
 
@@ -663,7 +755,7 @@ def main():
                     st.session_state["last_eval_mode"] = eval_mode
                     st.session_state["last_eval_dataset_name"] = dataset.get("dataset_name", "")
                 except Exception as exc:
-                    st.error(f"Evaluation failed: {exc}")
+                    st.error(f"评测失败：{exc}")
 
         render_eval_metrics(st.session_state["eval_metrics"])
         if st.session_state["eval_results"]:
@@ -677,14 +769,14 @@ def main():
             )
             csv_payload = export_results_as_csv(st.session_state["eval_results"])
             export_col1.download_button(
-                "Download Results JSON",
+                "下载评测结果 JSON",
                 data=json_payload,
                 file_name="evaluation_results.json",
                 mime="application/json",
                 use_container_width=True
             )
             export_col2.download_button(
-                "Download Results CSV",
+                "下载评测结果 CSV",
                 data=csv_payload,
                 file_name="evaluation_results.csv",
                 mime="text/csv",
