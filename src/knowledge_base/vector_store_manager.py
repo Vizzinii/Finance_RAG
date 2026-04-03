@@ -6,7 +6,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
 
 class VectorStoreManager:
-    def __init__(self, persist_directory: str = "./data/chroma_db", embedding_model=None, base_url: str = None, model_name: str = "text-embedding-ada-002", api_key: str = None):
+    def __init__(self, persist_directory: str = "./data/chroma_db", embedding_model=None, base_url: str = None, model_name: str = None, api_key: str = None):
         self.persist_directory = persist_directory
         # Ensure the directory exists
         os.makedirs(persist_directory, exist_ok=True)

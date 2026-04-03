@@ -10,3 +10,5 @@ pandas
 pdfplumber
 scikit-learn
 plotly
+python-docx
+pywin32

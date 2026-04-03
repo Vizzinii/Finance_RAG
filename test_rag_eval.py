@@ -1,25 +1,23 @@
 import os
 import sys
+import tempfile
 from unittest.mock import MagicMock, patch
 
 # Add src to path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 
-from rag_engine.financial_rag import FinancialRAG
+from data_manager.test_set_manager import TestSetManager
 from eval_engine.hallucination_evaluator import HallucinationEvaluator
-from knowledge_base.vector_store_manager import VectorStoreManager
 from langchain_core.documents import Document
-from langchain_core.messages import AIMessage
+from rag_engine.financial_rag import FinancialRAG
+
 
 def test_rag_and_eval():
-    print("Testing RAG and Eval Modules (with Mocks)...")
+    print("Testing RAG and evaluation workflow with mocks...")
 
-    # 1. Mock Vector Store
-    print("\n[1] Setting up Mock Vector Store...")
+    print("\n[1] Setting up mock vector store...")
     mock_vector_store = MagicMock()
     mock_retriever = MagicMock()
-    
-    # Mock retrieved documents
     mock_docs = [
         Document(page_content="Apple Inc. reported Q3 revenue of $81.4 billion."),
         Document(page_content="Microsoft Azure revenue grew 51% year-over-year.")
@@ -27,84 +25,100 @@ def test_rag_and_eval():
     mock_retriever.invoke.return_value = mock_docs
     mock_vector_store.as_retriever.return_value = mock_retriever
 
-    # 2. Mock LLM for RAG
-    print("[2] Setting up Mock LLM for RAG...")
-    with patch('rag_engine.financial_rag.ChatOpenAI') as MockChatOpenAI:
+    print("[2] Testing RAG retrieval interface...")
+    with patch("rag_engine.financial_rag.ChatOpenAI") as MockChatOpenAI:
         mock_llm = MagicMock()
-        # Mock the chain invocation result
-        # The chain in FinancialRAG returns a string (StrOutputParser)
-        # However, we are mocking the LLM, so we need to see how the chain is constructed.
-        # Chain: (input) | prompt | llm | parser
-        # If we mock LLM, LLM.invoke() should return a message-like object that StrOutputParser can parse,
-        # OR we can mock the entire chain. 
-        
-        # Let's mock the invoke method of the chain's LLM component
-        mock_message = AIMessage(content="Apple's Q3 revenue was $81.4 billion.")
-        mock_llm.invoke.return_value = mock_message
-        mock_llm.return_value = mock_message  # Handle __call__ if used
         MockChatOpenAI.return_value = mock_llm
 
-        # Instantiate RAG
         rag = FinancialRAG(vector_store=mock_vector_store)
-        
-        # Test generate_answer
-        print("Testing RAG generate_answer...")
-        query = "What was Apple's Q3 revenue?"
-        result = rag.generate_answer(query)
-        
-        print(f"Query: {result['query']}")
-        print(f"Answer: {result['answer']}")
-        print(f"Sources: {result['source_documents']}")
-        
-        if result['answer'] == "Apple's Q3 revenue was $81.4 billion." and len(result['source_documents']) == 2:
-            print("SUCCESS: RAG generation works.")
-        else:
-            print("FAILURE: RAG generation unexpected output.")
+        result = rag.retrieve_context("What was Apple's Q3 revenue?")
 
-    # 3. Test Evaluation
-    print("\n[3] Testing Evaluation Engine...")
-    with patch('eval_engine.hallucination_evaluator.ChatOpenAI') as MockEvalLLM:
-        mock_eval_llm = MagicMock()
-        # Mock responses for faithfulness and relevance
-        # First call: Faithfulness (score 1.0)
-        # Second call: Relevance (score 0.9)
-        mock_msg_1 = AIMessage(content="1.0")
-        mock_msg_2 = AIMessage(content="0.9")
-        
-        mock_eval_llm.invoke.side_effect = [mock_msg_1, mock_msg_2]
-        mock_eval_llm.side_effect = [mock_msg_1, mock_msg_2] # Handle __call__
-        MockEvalLLM.return_value = mock_eval_llm
-        
-        evaluator = HallucinationEvaluator()
-        
-        # Create a dummy dataset
-        dataset = [{
-            "id": 1,
-            "question": "What was Apple's Q3 revenue?",
-            "ground_truth": "$81.4 billion"
-        }]
-        
-        # We need to mock the rag_engine passed to run_batch_eval
-        # or reuse the one we created if we can patch its generation again.
-        # Let's just mock the rag_engine object passed to run_batch_eval
-        mock_rag_engine = MagicMock()
-        mock_rag_engine.generate_answer.return_value = {
-            "answer": "Apple's Q3 revenue was $81.4 billion.",
-            "source_documents": ["Apple Inc. reported Q3 revenue of $81.4 billion."]
-        }
-        
-        print("Running batch evaluation...")
-        eval_results = evaluator.run_batch_eval(dataset, mock_rag_engine)
-        
-        print("Eval Results:", eval_results)
-        
-        scores = evaluator.calculate_score(eval_results)
-        print("Scores:", scores)
-        
-        if scores['faithfulness'] == 1.0 and scores['relevance'] == 0.9:
-            print("SUCCESS: Evaluation engine works.")
+        print("RAG result:", result)
+        if len(result) == 2 and result[0].page_content.startswith("Apple Inc."):
+            print("SUCCESS: RAG retrieval works.")
         else:
-            print("FAILURE: Evaluation scores mismatch.")
+            print("FAILURE: Unexpected retrieval output.")
+
+    print("\n[3] Testing dataset manager structure...")
+    temp_dir = tempfile.mkdtemp(prefix="eval_dataset_", dir="data")
+    dataset_path = os.path.join(temp_dir, "test_eval_dataset.json")
+    manager = TestSetManager(data_path=dataset_path)
+    manager.import_dataset(
+        {
+            "dataset_name": "mock_eval",
+            "kb_version": "test",
+            "samples": [
+                {
+                    "id": 1,
+                    "question": "What was Apple's Q3 revenue?",
+                    "candidate_answer": "Apple's Q3 revenue was $91.4 billion.",
+                    "label": "positive",
+                    "source_model": "weak-model",
+                    "source_type": "weak_model",
+                    "reference_docs": ["Apple Inc. reported Q3 revenue of $81.4 billion."]
+                }
+            ]
+        }
+    )
+    loaded_dataset = manager.get_dataset()
+    print("Dataset:", loaded_dataset)
+    if loaded_dataset["samples"][0]["candidate_answer"]:
+        print("SUCCESS: Dataset manager stores structured samples.")
+    else:
+        print("FAILURE: Dataset manager did not persist structured sample.")
+
+    print("\n[4] Testing overall evaluation mode...")
+    with patch("eval_engine.hallucination_evaluator.ChatOpenAI"):
+        evaluator = HallucinationEvaluator()
+        evaluator._invoke_json = MagicMock(
+            return_value={
+                "verdict": "hallucinated",
+                "confidence": 0.93,
+                "reason": "The revenue number conflicts with the evidence.",
+                "evidence": ["Apple Inc. reported Q3 revenue of $81.4 billion."],
+                "unsupported_parts": ["$91.4 billion"]
+            }
+        )
+        results = evaluator.run_batch_eval(loaded_dataset, rag, mode="overall")
+        metrics = evaluator.calculate_classification_metrics(results)
+
+        print("Overall results:", results)
+        print("Overall metrics:", metrics)
+        if results[0]["predicted_label"] == "positive" and metrics["accuracy"] == 1.0:
+            print("SUCCESS: Overall evaluation mode works.")
+        else:
+            print("FAILURE: Overall evaluation mode mismatch.")
+
+    print("\n[5] Testing claim-level evaluation mode...")
+    with patch("eval_engine.hallucination_evaluator.ChatOpenAI"):
+        evaluator = HallucinationEvaluator()
+        evaluator._invoke_json = MagicMock(
+            side_effect=[
+                {"claims": ["Apple's Q3 revenue was $91.4 billion."]},
+                {
+                    "claim": "Apple's Q3 revenue was $91.4 billion.",
+                    "verdict": "contradicted",
+                    "confidence": 0.95,
+                    "reason": "The evidence states $81.4 billion instead.",
+                    "evidence": ["Apple Inc. reported Q3 revenue of $81.4 billion."]
+                }
+            ]
+        )
+        results = evaluator.run_batch_eval(loaded_dataset, rag, mode="claim")
+        metrics = evaluator.calculate_classification_metrics(results)
+
+        print("Claim results:", results)
+        print("Claim metrics:", metrics)
+        if results[0]["verdict"] == "hallucinated" and metrics["accuracy"] == 1.0:
+            print("SUCCESS: Claim-level evaluation mode works.")
+        else:
+            print("FAILURE: Claim-level evaluation mode mismatch.")
+
+    if os.path.exists(temp_dir):
+        import shutil
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     test_rag_and_eval()

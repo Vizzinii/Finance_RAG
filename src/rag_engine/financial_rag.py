@@ -5,7 +5,15 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
 class FinancialRAG:
-    def __init__(self, vector_store, model_name: str = "gpt-3.5-turbo", base_url: str = None, timeout: int = 60, api_key: str = None):
+    def __init__(
+        self,
+        vector_store,
+        model_name: str = None,
+        base_url: str = None,
+        timeout: int = 60,
+        api_key: str = None,
+        retrieval_top_k: int = 3
+    ):
         self.vector_store = vector_store
         # Initialize LLM (requires OPENAI_API_KEY or api_key param)
         self.llm = ChatOpenAI(
@@ -32,7 +40,7 @@ class FinancialRAG:
             Answer:"""
         )
         
-        self.retriever = self.vector_store.as_retriever(search_kwargs={"k": 3})
+        self.retriever = self.vector_store.as_retriever(search_kwargs={"k": retrieval_top_k})
         
         # Build the chain
         self.chain = (
